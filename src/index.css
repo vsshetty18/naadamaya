@@ -1,0 +1,199 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================
+   BASE
+   ========================================================== */
+@layer base {
+  :root {
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-ivory font-sans text-brown-800 antialiased;
+    margin: 0;
+    min-height: 100vh;
+    min-height: 100dvh;
+    background-image:
+      radial-gradient(90% 60% at 100% 0%, rgba(246, 233, 204, 0.55) 0%, transparent 60%),
+      radial-gradient(70% 50% at 0% 100%, rgba(227, 235, 221, 0.45) 0%, transparent 60%);
+    background-attachment: fixed;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-serif text-brown-900;
+    font-weight: 600;
+  }
+
+  button {
+    @apply font-sans;
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  /* Visible, on-brand keyboard focus */
+  :focus-visible {
+    outline: 2px solid #B98A42;
+    outline-offset: 2px;
+    border-radius: 0.5rem;
+  }
+
+  ::selection {
+    background: #F6E9CC;
+    color: #301C12;
+  }
+
+  /* Range input used by the audio player scrubber */
+  input[type='range'] {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+  }
+}
+
+/* ==========================================================
+   COMPONENT PRIMITIVES (shared across all pages)
+   ========================================================== */
+@layer components {
+  /* Rounded white-ivory card with a thin warm border */
+  .nm-card {
+    @apply rounded-card border border-gold-100/70 bg-card-warm shadow-card;
+  }
+
+  .nm-card-flat {
+    @apply rounded-card border border-gold-100/70 bg-ivory-50 shadow-soft;
+  }
+
+  /* Page title ("Learn", "Report", "Stage") */
+  .nm-title {
+    @apply font-serif text-title font-semibold text-brown-900 md:text-title-lg;
+  }
+
+  .nm-subtitle {
+    @apply font-serif text-[1.05rem] leading-snug text-brown-600 md:text-lg;
+  }
+
+  /* Small uppercase label */
+  .nm-eyebrow {
+    @apply font-sans text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-brown-400;
+  }
+
+  /* Thin decorative divider with a centered dot */
+  .nm-divider {
+    @apply h-px w-full bg-gradient-to-r from-transparent via-gold-200 to-transparent;
+  }
+
+  /* Wordmark styling from the logo (thin, wide-tracked) */
+  .nm-wordmark {
+    @apply font-display font-light uppercase tracking-wordmark text-brown-500;
+  }
+
+  .nm-tagline {
+    @apply font-display text-[0.6rem] font-normal lowercase tracking-tagline text-brown-400;
+  }
+
+  /* Hide scrollbars where horizontal scrolling is used */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ==========================================================
+   UTILITIES
+   ========================================================== */
+@layer utilities {
+  /* Keeps content clear of the fixed bottom navigation */
+  .pb-nav {
+    padding-bottom: calc(6.5rem + var(--safe-bottom));
+  }
+
+  .safe-bottom {
+    padding-bottom: var(--safe-bottom);
+  }
+
+  .safe-top {
+    padding-top: var(--safe-top);
+  }
+
+  /* Skeleton shimmer for loading states */
+  .nm-skeleton {
+    background: linear-gradient(
+      90deg,
+      #f5eddd 25%,
+      #fbf6ec 50%,
+      #f5eddd 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 2.2s linear infinite;
+  }
+
+  /* Staggered entrance helper: style="--d: 2" */
+  .stagger {
+    animation-delay: calc(var(--d, 0) * 70ms);
+  }
+}
+
+/* ==========================================================
+   CUSTOM CONTROLS
+   ========================================================== */
+
+/* Audio scrubber thumb + track */
+input[type='range'].nm-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: transparent;
+}
+input[type='range'].nm-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 12px;
+  width: 12px;
+  margin-top: -4px;
+  border-radius: 9999px;
+  background: #93582f;
+  border: 2px solid #fdfaf4;
+  box-shadow: 0 1px 4px rgba(120, 84, 50, 0.35);
+}
+input[type='range'].nm-range::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: transparent;
+}
+input[type='range'].nm-range::-moz-range-thumb {
+  height: 12px;
+  width: 12px;
+  border-radius: 9999px;
+  background: #93582f;
+  border: 2px solid #fdfaf4;
+  box-shadow: 0 1px 4px rgba(120, 84, 50, 0.35);
+}
+
+/* ==========================================================
+   ACCESSIBILITY
+   ========================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
