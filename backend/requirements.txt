@@ -1,0 +1,41 @@
+# NAADAMAYA backend dependencies
+# Python 3.11 is recommended (librosa and numba support 3.12 too, but 3.11 is the safest).
+
+# ---- Web framework ----
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.12      # file uploads
+sse-starlette==2.1.3          # server-sent events (live analysis progress)
+
+# ---- Validation and settings ----
+pydantic==2.9.2
+pydantic-settings==2.5.2
+email-validator==2.2.0
+
+# ---- Database ----
+SQLAlchemy==2.0.35
+alembic==1.13.3
+psycopg[binary]==3.2.3        # PostgreSQL driver (URL scheme: postgresql+psycopg://)
+
+# ---- Authentication ----
+PyJWT==2.9.0
+argon2-cffi==23.1.0           # password hashing
+
+# ---- Background jobs ----
+celery[redis]==5.4.0
+redis==5.1.1
+
+# ---- Audio analysis ----
+numpy==1.26.4
+scipy==1.14.1
+librosa==0.10.2.post1
+soundfile==0.12.1
+# FFmpeg is a system program, not a pip package. Install it separately.
+
+# ---- Storage ----
+boto3==1.35.36                # S3-compatible storage (production)
+aiofiles==24.1.0
+
+# ---- Testing ----
+pytest==8.3.3
+httpx==0.27.2                 # used by FastAPI's TestClient
