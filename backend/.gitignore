@@ -1,0 +1,50 @@
+# NAADAMAYA backend
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+.python-version
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- Secrets (never commit real values) ----
+.env
+.env.*
+!.env.example
+
+# ---- Uploaded and processed audio (user data) ----
+uploads/
+storage/
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.ogg
+!tests/fixtures/*.wav
+
+# ---- Local databases and caches ----
+*.sqlite3
+*.db
+dump.rdb
+celerybeat-schedule*
+
+# ---- Editors and OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- Logs ----
+*.log
+logs/
