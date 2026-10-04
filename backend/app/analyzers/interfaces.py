@@ -145,6 +145,7 @@ class AlignmentResult:
     path: list[tuple[float, float]] = field(default_factory=list)
     quality: float = 0.0             # 0..1, how trustworthy the alignment is
     notes: list[str] = field(default_factory=list)
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 # ==========================================================
