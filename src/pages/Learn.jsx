@@ -7,14 +7,14 @@ import Button from '@/components/Button'
 import RecordModal from '@/components/RecordModal'
 import UploadModal from '@/components/UploadModal'
 import { useAppState } from '@/context/AppStateContext'
-import { validateAudioInputs } from '@/services/analysisService'
 
 /**
  * Learn: the singer provides the original song and their own voice,
  * then asks for a comparison report.
  *
- * This page only collects audio and starts a run. The processing screen and
- * the report itself live on the Report page. No analysis happens here.
+ * This page only collects audio and starts a run. Uploading to the server,
+ * progress and the report itself are handled by AppStateContext.runAnalysis()
+ * and shown on the Report page. No analysis happens here.
  */
 
 const SLOTS = {
@@ -34,7 +34,7 @@ const SLOTS = {
   },
 }
 
-/** Small decorative feather and flute for the info card (kept subtle). */
+/** Small decorative feather for the info card (kept subtle). */
 function FeatherDecor({ className }) {
   return (
     <svg viewBox="0 0 60 90" className={className} aria-hidden="true">
@@ -50,24 +50,15 @@ function FeatherDecor({ className }) {
 
 export default function Learn() {
   const navigate = useNavigate()
-  const {
-    original,
-    userVoice,
-    setAudio,
-    clearAudio,
-    runAnalysis,
-    isProcessing,
-  } = useAppState()
+  const { original, userVoice, setAudio, clearAudio, runAnalysis, isProcessing } = useAppState()
 
   const [uploadSlot, setUploadSlot] = useState(null) // 'original' | 'user' | null
   const [recordSlot, setRecordSlot] = useState(null)
   const [slotErrors, setSlotErrors] = useState({ original: null, user: null })
-  const [simulate, setSimulate] = useState('') // dev only: force a failure screen
 
   const audioFor = { original, user: userVoice }
 
-  const setSlotError = (slot, message) =>
-    setSlotErrors((prev) => ({ ...prev, [slot]: message }))
+  const setSlotError = (slot, message) => setSlotErrors((prev) => ({ ...prev, [slot]: message }))
 
   const handleConfirm = (slot) => (audio) => {
     setAudio(slot, audio)
@@ -96,19 +87,10 @@ export default function Learn() {
       return
     }
 
-    // Format check (a missing slot was handled above).
-    try {
-      validateAudioInputs(original, userVoice)
-    } catch (err) {
-      const slot = err.details?.slot
-      if (slot) setSlotError(slot, err.message)
-      return
-    }
-
     setSlotErrors({ original: null, user: null })
 
-    // Start the run, then show its progress on the Report page.
-    runAnalysis(simulate ? { simulate } : {})
+    // Start the run (uploads, queues, polls), then show its progress on Report.
+    runAnalysis()
     navigate('/report')
   }
 
@@ -127,7 +109,7 @@ export default function Learn() {
       <div className="mt-6 grid gap-4 lg:grid-cols-[1.35fr_1fr] lg:items-start lg:gap-8">
         {/* Inputs and CTA */}
         <div className="flex flex-col gap-3.5">
-          {[SLOTS.original, SLOTS.user].map((slot, i) => (
+          {[SLOTS.original, SLOTS.user].map((slot) => (
             <AudioUploadCard
               key={slot.key}
               title={slot.title}
@@ -140,8 +122,6 @@ export default function Learn() {
               onUpload={() => setUploadSlot(slot.key)}
               onRecord={() => setRecordSlot(slot.key)}
               onRemove={handleRemove(slot.key)}
-              className="stagger"
-              style={{ '--d': i }}
             />
           ))}
 
@@ -155,23 +135,6 @@ export default function Learn() {
           >
             Report
           </Button>
-
-          {/* Dev-only: preview the failure screens without breaking anything */}
-          {import.meta.env.DEV && (
-            <label className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-gold-200 px-3 py-2 text-[0.75rem] text-brown-500">
-              <span>Dev: simulate a failed run</span>
-              <select
-                value={simulate}
-                onChange={(e) => setSimulate(e.target.value)}
-                className="rounded-lg border border-gold-200 bg-ivory-50 px-2 py-1 text-[0.75rem] text-brown-700"
-              >
-                <option value="">None</option>
-                <option value="failure">Analysis failed</option>
-                <option value="timeout">Timeout</option>
-                <option value="network">Network error</option>
-              </select>
-            </label>
-          )}
         </div>
 
         {/* Information card */}
