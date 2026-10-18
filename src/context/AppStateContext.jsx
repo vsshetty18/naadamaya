@@ -1,53 +1,45 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 
+import { useAuth } from '@/context/AuthContext'
+import { ApiError } from '@/services/apiClient'
 import {
-  analyzeSong,
-  getAnalysis,
-  listAnalyzedSongs,
-  validateAudioInputs,
-} from '@/services/analysisService'
-import { mockAnalysisData } from '@/data/mockAnalysisData'
+  getDashboard,
+  getReport,
+  getUsage,
+  getProgressOverview,
+  listAnalyses,
+  startAnalysis,
+  waitForAnalysis,
+} from '@/services/api/analysis'
+import {
+  fetchMediaUrl,
+  getProfile,
+  updateProfile as saveProfile,
+  uploadProfilePhoto,
+  uploadRecording,
+  uploadReferenceSong,
+} from '@/services/api/library'
+import { adaptProgress, adaptReport, attachAudio } from '@/services/reportAdapter'
 
 /**
- * Shared app state. It holds state and calls analysisService. It contains
- * no analysis logic of its own.
+ * NAADAMAYA app state, backed by the real API.
  *
- *  audio      the Original and Your Voice slots filled on Learn
- *  run        the live analysis: idle | processing | complete | error
- *  report     the analysis currently shown on Report: empty | loading | ready | error
- *  history    attempt scores per song, appended after every completed analysis
- *  credits    balance, plan and recent usage
- *  profile    user details, stats and preferences (mock)
+ * Everything here comes from the server: profile, credits, statistics, recent
+ * usage, the list of reports and the report on screen. Nothing is mocked.
+ * Credits and usage are never calculated here, so they cannot be tampered with.
+ *
+ * Local only (no backend for them yet): the two audio slots on Learn, and the
+ * Preferences screen values (theme, reminders, ...).
+ *
+ * Must be rendered INSIDE <AuthProvider>. Data loads when the user is signed
+ * in and is cleared when they sign out.
  */
 
-/* ==========================================================
-   INITIAL MOCK ACCOUNT DATA (no backend yet)
-   ========================================================== */
-
-const INITIAL_PROFILE = {
-  name: 'V S Vighnesh',
-  email: 'vighnesh@example.com',
-  phone: '+91 98765 43210',
-  avatarUrl: null,
-}
-
-const INITIAL_STATS = { songsPracticed: 23, songsRecorded: 7, songsPosted: 2 }
-
-const INITIAL_CREDITS = { plan: 'free', total: 10, remaining: 10 }
-
-const INITIAL_USAGE = [
-  { id: 'use_1', title: 'Mungaru Maleye', credits: 1, date: '2026-09-28' },
-  { id: 'use_2', title: 'Krishna Nee Begane', credits: 1, date: '2026-09-26' },
-  { id: 'use_3', title: 'Hanuman Chalisa', credits: 1, date: '2026-09-24' },
-]
+const EMPTY_PROFILE = { name: '', email: '', phone: '', avatarUrl: null }
+const EMPTY_CREDITS = { plan: 'free', total: 0, remaining: 0 }
+const EMPTY_STATS = { songsPracticed: 0, songsRecorded: 0, songsPosted: null } // posting is not built
+const IDLE_RUN = { status: 'idle', progress: null, error: null }
+const EMPTY_REPORT = { status: 'empty', analysis: null, error: null }
 
 const INITIAL_PREFERENCES = {
   language: 'English',
@@ -57,281 +49,345 @@ const INITIAL_PREFERENCES = {
   audioQuality: 'High',
 }
 
-/** Starts each song's attempt history from its mock analysis. */
-function seedHistory() {
-  const history = {}
-  Object.values(mockAnalysisData).forEach((a) => {
-    history[a.songId] = (a.attemptHistory || []).map((entry) => ({ ...entry }))
-  })
-  return history
-}
-
-/* ==========================================================
-   HELPERS
-   ========================================================== */
-
-const IDLE_RUN = { status: 'idle', progress: null, error: null }
-const EMPTY_REPORT = { status: 'empty', analysis: null, error: null }
-
-/** Turns anything thrown into the { code, message, details } shape the UI reads. */
-function toErrorState(err) {
+/* ---------------- errors shown by ErrorReport ---------------- */
+function toErrorState(err, slot) {
+  if (!(err instanceof ApiError)) {
+    return { code: 'analysis_failed', message: err?.message || 'Something went wrong.', details: {} }
+  }
+  const map = {
+    USAGE_LIMIT_REACHED: 'no_credits',
+    NETWORK_ERROR: 'network_error',
+    TIMEOUT: 'timeout',
+    INVALID_AUDIO: 'unsupported_format',
+    UNSUPPORTED_MEDIA_TYPE: 'unsupported_format',
+    FILE_TOO_LARGE: 'unsupported_format',
+    RESOURCE_NOT_FOUND: 'not_found',
+  }
   return {
-    code: err?.code || 'analysis_failed',
-    message: err?.message || 'Something went wrong.',
-    details: err?.details || {},
+    code: map[err.code] || 'analysis_failed',
+    message: err.message,
+    details: { ...err.details, slot },
   }
 }
-
-/**
- * Gives a slot its own object URL, made from the file or recording.
- * The upload/record modals revoke their URLs when they close, so the app
- * keeps separate copies that it controls.
- */
-function ownUrl(audio) {
-  if (!audio) return null
-  const source = audio.file || audio.blob
-  if (!source) return { ...audio, ownsUrl: false }
-  return { ...audio, url: URL.createObjectURL(source), ownsUrl: true }
-}
-
-function revokeOwned(audio) {
-  if (audio?.ownsUrl && audio.url) URL.revokeObjectURL(audio.url)
-}
-
-/* ==========================================================
-   CONTEXT
-   ========================================================== */
 
 const AppStateContext = createContext(null)
 
 export function AppStateProvider({ children }) {
-  /* ---------- audio slots (Learn) ---------- */
-  const [slots, setSlots] = useState({ original: null, user: null })
-  const slotsRef = useRef(slots)
+  const { status: authStatus } = useAuth()
+  const signedIn = authStatus === 'authenticated'
 
-  const setAudio = useCallback((slot, audio) => {
-    const nextSlots = { ...slotsRef.current, [slot]: ownUrl(audio) }
-    revokeOwned(slotsRef.current[slot])
-    slotsRef.current = nextSlots
-    setSlots(nextSlots)
+  /* ---------- account (from the server) ---------- */
+  const [profile, setProfile] = useState(EMPTY_PROFILE)
+  const [stats, setStats] = useState(EMPTY_STATS)
+  const [credits, setCredits] = useState(EMPTY_CREDITS)
+  const [usage, setUsage] = useState([])
+  const [accountLoaded, setAccountLoaded] = useState(false)
+  const [preferences, setPreferences] = useState(INITIAL_PREFERENCES)
+  const avatarBlob = useRef(null)
+
+  const applyProfile = useCallback(async (p) => {
+    let avatarUrl = null
+    try {
+      avatarUrl = await fetchMediaUrl(p.profile_photo_url)
+    } catch {
+      avatarUrl = null
+    }
+    if (avatarBlob.current) URL.revokeObjectURL(avatarBlob.current)
+    avatarBlob.current = avatarUrl && avatarUrl.startsWith('blob:') ? avatarUrl : null
+    setProfile({
+      name: p.display_name || '',
+      email: p.email || '',
+      phone: p.phone_number || '',
+      avatarUrl,
+      raw: p,
+    })
   }, [])
 
-  const clearAudio = useCallback((slot) => setAudio(slot, null), [setAudio])
+  const applyUsage = useCallback((u) => {
+    setCredits({ plan: String(u.plan_code || 'FREE').toLowerCase(), total: u.limit, remaining: u.remaining })
+    setUsage(
+      (u.recent || []).map((r, i) => ({
+        id: r.analysis_id || `usage-${i}`,
+        title: r.title || 'Deleted song',
+        credits: r.credits,
+        date: r.date,
+      }))
+    )
+  }, [])
 
-  /* ---------- account ---------- */
-  const [profile, setProfile] = useState(INITIAL_PROFILE)
-  const [stats, setStats] = useState(INITIAL_STATS)
-  const [credits, setCredits] = useState(INITIAL_CREDITS)
-  const [usage, setUsage] = useState(INITIAL_USAGE)
-  const [preferences, setPreferences] = useState(INITIAL_PREFERENCES)
-  const [history, setHistory] = useState(seedHistory)
+  /** Reloads profile, credits and statistics. Call after anything that changes them. */
+  const refreshAccount = useCallback(async () => {
+    const [p, u, o] = await Promise.allSettled([getProfile(), getUsage(), getProgressOverview()])
+    if (p.status === 'fulfilled') await applyProfile(p.value)
+    if (u.status === 'fulfilled') applyUsage(u.value)
+    if (o.status === 'fulfilled') {
+      setStats({
+        songsPracticed: o.value.songs_practiced,
+        songsRecorded: o.value.songs_recorded,
+        songsPosted: null,
+      })
+    }
+    setAccountLoaded(true)
+  }, [applyProfile, applyUsage])
 
-  const creditsRef = useRef(credits)
-  creditsRef.current = credits
+  const updateProfile = useCallback(
+    async (patch) => {
+      const fields = {}
+      if ('name' in patch) fields.display_name = patch.name || null
+      if ('email' in patch) fields.email = patch.email || null
+      if (Object.keys(fields).length) {
+        const saved = await saveProfile(fields)
+        await applyProfile(saved)
+      }
+    },
+    [applyProfile]
+  )
 
-  const updateProfile = useCallback((patch) => setProfile((p) => ({ ...p, ...patch })), [])
+  const setProfilePhoto = useCallback(
+    async (file) => {
+      await applyProfile(await uploadProfilePhoto(file))
+    },
+    [applyProfile]
+  )
+
   const updatePreferences = useCallback((patch) => setPreferences((p) => ({ ...p, ...patch })), [])
 
-  /** MOCK ONLY: no payment. The Stage and Credits pages pass the plan's credit amount. */
-  const changePlan = useCallback((planId, monthlyCredits) => {
-    setCredits({ plan: planId, total: monthlyCredits, remaining: monthlyCredits })
-  }, [])
+  /* ---------- audio slots on Learn ---------- */
+  const [slots, setSlots] = useState({ original: null, user: null })
+  const slotsRef = useRef(slots)
+  const uploaded = useRef(new WeakMap()) // audio object -> { songId } or { recordingId }
 
-  /* ---------- report viewing ---------- */
+  const ownUrl = (audio) => {
+    if (!audio) return null
+    const source = audio.file || audio.blob
+    if (!source) return { ...audio, ownsUrl: false }
+    return { ...audio, url: URL.createObjectURL(source), ownsUrl: true }
+  }
+  const revokeOwned = (audio) => {
+    if (audio?.ownsUrl && audio.url) URL.revokeObjectURL(audio.url)
+  }
+
+  const setAudio = useCallback((slot, audio) => {
+    revokeOwned(slotsRef.current[slot])
+    const next = { ...slotsRef.current, [slot]: ownUrl(audio) }
+    slotsRef.current = next
+    setSlots(next)
+  }, [])
+  const clearAudio = useCallback((slot) => setAudio(slot, null), [setAudio])
+
+  /* ---------- reports ---------- */
   const [report, setReport] = useState(EMPTY_REPORT)
   const [songList, setSongList] = useState([])
-  const viewIdRef = useRef(0)
+  const viewId = useRef(0)
+  const releaseAudio = useRef(() => {})
 
-  useEffect(() => {
-    let alive = true
-    listAnalyzedSongs()
-      .then((list) => alive && setSongList(list))
-      .catch(() => {})
-    return () => {
-      alive = false
-    }
+  const showReport = useCallback(async (reportData) => {
+    const adapted = adaptReport(reportData)
+    const { analysis, release } = await attachAudio(adapted)
+    releaseAudio.current()
+    releaseAudio.current = release
+    return analysis
   }, [])
 
-  /** Loads an existing analysis (the Report song selector). Does not touch history or credits. */
-  const viewAnalysis = useCallback(async (keyOrId) => {
-    const id = ++viewIdRef.current
-    setReport((r) => ({ ...r, status: 'loading', error: null }))
+  const refreshSongList = useCallback(async () => {
     try {
-      const analysis = await getAnalysis(keyOrId)
-      if (id !== viewIdRef.current) return
-      setReport({ status: 'ready', analysis, error: null })
-    } catch (err) {
-      if (id !== viewIdRef.current) return
-      setReport({ status: 'error', analysis: null, error: toErrorState(err) })
+      const page = await listAnalyses({ page_size: 50 })
+      const seen = new Set()
+      const list = []
+      for (const a of page.items) {
+        if (a.status !== 'COMPLETED' || seen.has(a.song_id)) continue
+        seen.add(a.song_id) // newest attempt per song
+        list.push({ key: a.id, songId: a.song_id, title: a.song_title || 'Song', artist: a.song_artist, duration: null })
+      }
+      setSongList(list)
+    } catch {
+      /* the dropdown simply stays as it was */
     }
   }, [])
 
-  /* ---------- running a new analysis ---------- */
-  const [run, setRun] = useState(IDLE_RUN)
-  const runIdRef = useRef(0)
-  const abortRef = useRef(null)
+  /** Loads one finished report (the Report song selector). Does not touch credits. */
+  const viewAnalysis = useCallback(
+    async (analysisId) => {
+      const id = ++viewId.current
+      setReport((r) => ({ ...r, status: 'loading', error: null }))
+      try {
+        const analysis = await showReport(await getReport(analysisId))
+        if (id !== viewId.current) return
+        setReport({ status: 'ready', analysis, error: null })
+      } catch (err) {
+        if (id !== viewId.current) return
+        setReport({ status: 'error', analysis: null, error: toErrorState(err) })
+      }
+    },
+    [showReport]
+  )
 
-  const runAnalysis = useCallback(async (options = {}) => {
+  /* ---------- running an analysis ---------- */
+  const [run, setRun] = useState(IDLE_RUN)
+  const runId = useRef(0)
+  const abortRef = useRef(null)
+  const keys = useRef(new Map()) // recordingId -> idempotency key, reused when retrying
+
+  const runAnalysis = useCallback(async () => {
     abortRef.current?.abort()
-    const runId = ++runIdRef.current
+    const myRun = ++runId.current
     const controller = new AbortController()
     abortRef.current = controller
+    const alive = () => runId.current === myRun
+    const fail = (err, slot) => alive() && setRun({ status: 'error', progress: null, error: toErrorState(err, slot) })
 
     const { original, user } = slotsRef.current
-
-    // Fail early, before any processing screen appears.
-    try {
-      validateAudioInputs(original, user)
-    } catch (err) {
-      setRun({ status: 'error', progress: null, error: toErrorState(err) })
-      return null
+    const missing = (slot, text) => ({ code: 'audio_missing', message: text, details: { slot } })
+    if (!original) return setRun({ status: 'error', progress: null, error: missing('original', 'The original song is missing.') })
+    if (!user) return setRun({ status: 'error', progress: null, error: missing('user', 'Your voice recording is missing.') })
+    for (const [slot, audio] of [['original', original], ['user', user]]) {
+      if (!audio.file && !audio.blob) {
+        return setRun({
+          status: 'error',
+          progress: null,
+          error: missing(slot, 'A demo recording has no audio to analyse. Record with a microphone or upload a file.'),
+        })
+      }
     }
-    if (creditsRef.current.remaining < 1) {
-      setRun({
+    if (accountLoaded && credits.remaining < 1) {
+      return setRun({
         status: 'error',
         progress: null,
         error: { code: 'no_credits', message: 'You have no analysis credits left.', details: {} },
       })
-      return null
     }
 
-    // The analysis gets its own audio URLs, so the Report players keep working
-    // even if the user later replaces a slot on Learn.
-    const snapshotOriginal = ownUrl(original)
-    const snapshotUser = ownUrl(user)
-    const isRecordedTake = !user.file
+    const step = (label, percent) =>
+      alive() &&
+      setRun({ status: 'processing', progress: { status: 'processing', stepIndex: 0, totalSteps: 8, stepId: 'UPLOAD', label, percent }, error: null })
 
-    setRun({
-      status: 'processing',
-      progress: { stepIndex: 0, totalSteps: 0, stepId: null, label: '', percent: 0 },
-      error: null,
-    })
-
+    let slot = 'original'
     try {
-      const analysis = await analyzeSong(snapshotOriginal, snapshotUser, {
-        ...options,
+      step('Uploading your audio...', 1)
+
+      // Uploads are remembered per audio object, so a retry never uploads twice.
+      let song = uploaded.current.get(original)
+      if (!song) {
+        song = await uploadReferenceSong(original.file || original.blob)
+        uploaded.current.set(original, song)
+      }
+      slot = 'user'
+      let rec = uploaded.current.get(user)
+      if (!rec) {
+        rec = await uploadRecording(user.file || user.blob, song.id, { source: user.file ? 'upload' : 'browser_recording' })
+        uploaded.current.set(user, rec)
+      }
+
+      const started = await startAnalysis(rec.id, { songId: song.id, idempotencyKey: keys.current.get(rec.id) })
+      keys.current.set(rec.id, started.idempotencyKey) // a retry after a network error reuses it
+      if (started.credits_remaining != null) setCredits((c) => ({ ...c, remaining: started.credits_remaining }))
+
+      const final = await waitForAnalysis(started.analysis_id, {
         signal: controller.signal,
-        onProgress: (p) => {
-          if (runIdRef.current === runId) setRun((r) => ({ ...r, progress: p }))
-        },
+        onProgress: (s) => alive() && setRun({ status: 'processing', progress: adaptProgress(s), error: null }),
       })
+      if (!alive()) return
 
-      // A newer run replaced this one, so drop the stale result.
-      if (runIdRef.current !== runId) {
-        revokeOwned(snapshotOriginal)
-        revokeOwned(snapshotUser)
-        return null
+      if (final.status === 'FAILED') {
+        refreshAccount() // the credit was refunded
+        keys.current.delete(rec.id)
+        return setRun({
+          status: 'error',
+          progress: null,
+          error: {
+            code: final.error?.code === 'TIMEOUT' ? 'timeout' : 'analysis_failed',
+            message: final.error?.message || 'We could not finish analysing this performance.',
+            details: { credit_refunded: final.error?.credit_refunded },
+          },
+        })
       }
 
-      viewIdRef.current += 1 // cancels any report load still in flight
+      const analysis = await showReport(await getReport(started.analysis_id))
+      if (!alive()) return
+      keys.current.delete(rec.id)
+      viewId.current += 1
       setReport({ status: 'ready', analysis, error: null })
-
-      setHistory((prev) => {
-        const list = prev[analysis.songId] || []
-        const lastAttempt = list.length ? list[list.length - 1].attempt : 0
-        return {
-          ...prev,
-          [analysis.songId]: [
-            ...list,
-            { attempt: lastAttempt + 1, score: analysis.overallScore, date: analysis.createdAt },
-          ],
-        }
-      })
-
-      // Credits are only spent on a completed analysis, never on a failed one.
-      setCredits((c) => ({ ...c, remaining: Math.max(0, c.remaining - 1) }))
-      setUsage((u) => [
-        { id: analysis.analysisId, title: analysis.original.title, credits: 1, date: analysis.createdAt },
-        ...u,
-      ])
-      setStats((s) => ({
-        ...s,
-        songsPracticed: s.songsPracticed + 1,
-        songsRecorded: s.songsRecorded + (isRecordedTake ? 1 : 0),
-      }))
-
-      setRun((r) => ({ ...r, status: 'complete', error: null }))
-      return analysis
+      setRun({ status: 'complete', progress: adaptProgress({ ...final, status: 'COMPLETED' }), error: null })
+      refreshAccount()
+      refreshSongList()
     } catch (err) {
-      revokeOwned(snapshotOriginal)
-      revokeOwned(snapshotUser)
-      if (runIdRef.current !== runId) return null
-
-      if (err?.code === 'cancelled') {
-        setRun(IDLE_RUN)
-      } else {
-        setRun({ status: 'error', progress: null, error: toErrorState(err) })
-      }
-      return null
+      if (err?.name === 'AbortError') return alive() && setRun(IDLE_RUN)
+      fail(err, slot)
     }
-  }, [])
+  }, [accountLoaded, credits.remaining, refreshAccount, refreshSongList, showReport])
 
   const cancelAnalysis = useCallback(() => abortRef.current?.abort(), [])
+  const dismissRun = useCallback(() => setRun((r) => (r.status === 'processing' ? r : IDLE_RUN)), [])
 
-  /** Clears a finished or failed run so the Report shows the report or empty state again. */
-  const dismissRun = useCallback(() => {
-    setRun((r) => (r.status === 'processing' ? r : IDLE_RUN))
-  }, [])
-
-  // Stop timers and release object URLs if the whole app unmounts.
+  /* ---------- load on sign-in, clear on sign-out ---------- */
   useEffect(() => {
-    return () => {
-      abortRef.current?.abort()
-      revokeOwned(slotsRef.current.original)
-      revokeOwned(slotsRef.current.user)
+    if (signedIn) {
+      refreshAccount()
+      refreshSongList()
+      return undefined
     }
-  }, [])
+    abortRef.current?.abort()
+    releaseAudio.current()
+    if (avatarBlob.current) URL.revokeObjectURL(avatarBlob.current)
+    avatarBlob.current = null
+    revokeOwned(slotsRef.current.original)
+    revokeOwned(slotsRef.current.user)
+    slotsRef.current = { original: null, user: null }
+    setSlots(slotsRef.current)
+    setProfile(EMPTY_PROFILE)
+    setStats(EMPTY_STATS)
+    setCredits(EMPTY_CREDITS)
+    setUsage([])
+    setSongList([])
+    setReport(EMPTY_REPORT)
+    setRun(IDLE_RUN)
+    setAccountLoaded(false)
+    return undefined
+  }, [signedIn, refreshAccount, refreshSongList])
 
   /* ---------- derived ---------- */
-  const currentHistory = useMemo(() => {
-    const analysis = report.analysis
-    if (!analysis) return []
-    return history[analysis.songId] || analysis.attemptHistory || []
-  }, [report.analysis, history])
-
-  const creditPercent =
-    credits.total > 0 ? Math.round((credits.remaining / credits.total) * 100) : 0
+  const currentHistory = useMemo(() => report.analysis?.attemptHistory || [], [report.analysis])
+  const creditPercent = credits.total > 0 ? Math.round((credits.remaining / credits.total) * 100) : 0
 
   const value = useMemo(
     () => ({
-      // audio slots
       original: slots.original,
       userVoice: slots.user,
       hasBothAudio: Boolean(slots.original && slots.user),
       setAudio,
       clearAudio,
 
-      // running an analysis
-      run, // { status, progress, error }
+      run,
       isProcessing: run.status === 'processing',
       runAnalysis,
       cancelAnalysis,
       dismissRun,
 
-      // viewing a report
-      report, // { status, analysis, error }
+      report,
       songList,
       viewAnalysis,
-      history,
+      history: {},
       currentHistory,
 
-      // account
       profile,
       updateProfile,
+      setProfilePhoto,
       stats,
       credits,
       creditPercent,
       usage,
-      changePlan,
+      accountLoaded,
+      refreshAccount,
+      // Plans are bought through Razorpay (useRazorpay). The mock changePlan is gone:
+      // this only reloads the real credits and plan from the server.
+      changePlan: refreshAccount,
       preferences,
       updatePreferences,
     }),
     [
-      slots, setAudio, clearAudio,
-      run, runAnalysis, cancelAnalysis, dismissRun,
-      report, songList, viewAnalysis, history, currentHistory,
-      profile, updateProfile, stats, credits, creditPercent, usage, changePlan,
-      preferences, updatePreferences,
+      slots, setAudio, clearAudio, run, runAnalysis, cancelAnalysis, dismissRun,
+      report, songList, viewAnalysis, currentHistory, profile, updateProfile, setProfilePhoto,
+      stats, credits, creditPercent, usage, accountLoaded, refreshAccount, preferences, updatePreferences,
     ]
   )
 
