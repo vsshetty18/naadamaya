@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, Info, TrendingDown, TrendingUp } from 'lucide-react'
 
 import AttemptHistory from '@/components/AttemptHistory'
 import AudioComparison from '@/components/AudioComparison'
@@ -26,25 +26,25 @@ import { sortByRelevance } from '@/utils/metricConfig'
 
 /**
  * Report: renders ONE analysis object, whatever it contains.
+ * Data comes from the server through AppStateContext (reportAdapter shapes it).
  *
  * Which screen shows (first match wins):
  *   run processing / complete   ProcessingState
  *   run error                   ErrorReport
- *   report empty                EmptyReport
  *   report loading              ReportSkeleton
  *   report error                ErrorReport
  *   report ready                the report
+ *   otherwise                   EmptyReport
  *
- * Every card below is drawn only when the analysis contains its data.
- * No scores, titles or insights are written in this file.
+ * Every card is drawn only when the analysis contains its data. Metrics that
+ * could not be measured are listed in a short "Not measured" note, never as a
+ * card with a made-up score. A null overall score shows a dash.
  */
 
-/** True while the viewport matches a CSS media query. */
 function useMediaQuery(query) {
   const [matches, setMatches] = useState(
     () => typeof window !== 'undefined' && window.matchMedia(query).matches
   )
-
   useEffect(() => {
     const mq = window.matchMedia(query)
     const onChange = (e) => setMatches(e.matches)
@@ -52,17 +52,16 @@ function useMediaQuery(query) {
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
   }, [query])
-
   return matches
 }
 
-/** Pill-shaped song picker (native select, so it works well on phones). */
+/** Pill-shaped report picker (native select). Each option is one finished report. */
 function SongSelect({ songs, analysis, disabled, onChange }) {
-  const currentKey = analysis ? songs.find((s) => s.songId === analysis.songId)?.key : undefined
-  const needsExtra = analysis && !currentKey
-  const value = currentKey ?? (needsExtra ? '__current' : '')
-
   if (!songs.length && !analysis) return null
+
+  const current = songs.find((s) => s.songId === analysis?.songId)
+  const needsExtra = analysis && !current
+  const value = current?.key ?? (needsExtra ? '__current' : '')
 
   return (
     <label className="relative block max-w-[11.5rem] shrink-0 sm:max-w-[16rem]">
@@ -94,12 +93,50 @@ function SongSelect({ songs, analysis, disabled, onChange }) {
   )
 }
 
-/** Lays out cards in two columns on desktop. Empty lists draw nothing. */
+/** Cards in two columns on desktop. Empty rows draw nothing. */
 function CardRow({ children }) {
   const items = (Array.isArray(children) ? children : [children]).filter(Boolean)
   if (items.length === 0) return null
+  return <div className={cn('grid gap-4 lg:items-start', items.length > 1 && 'lg:grid-cols-2')}>{items}</div>
+}
+
+/** Plain note for things the engine could not measure or estimated. */
+function Notes({ unavailable, estimatedSections }) {
+  if (unavailable.length === 0 && !estimatedSections) return null
   return (
-    <div className={cn('grid gap-4 lg:items-start', items.length > 1 && 'lg:grid-cols-2')}>{items}</div>
+    <section aria-label="About this report" className="nm-card animate-fade-up p-4 sm:p-5">
+      <div className="flex items-center gap-2">
+        <Info className="h-4 w-4 shrink-0 text-gold-500" strokeWidth={1.8} aria-hidden="true" />
+        <h2 className="font-serif text-[1.15rem] font-semibold leading-none text-brown-900">About this report</h2>
+      </div>
+      <ul className="mt-3 flex flex-col gap-2 text-[0.82rem] leading-snug text-brown-600">
+        {unavailable.map((m) => (
+          <li key={m.id}>
+            <span className="font-medium text-brown-800">{m.name} was not measured.</span> {m.reason}
+          </li>
+        ))}
+        {estimatedSections && (
+          <li>
+            The song sections are an estimated split of the original, not named verses or choruses.
+          </li>
+        )}
+      </ul>
+    </section>
+  )
+}
+
+function ChangeLine({ previous }) {
+  if (!previous || previous.delta === null) return null
+  const up = previous.delta > 0
+  const flat = Math.abs(previous.delta) < 1
+  const Icon = up ? TrendingUp : TrendingDown
+  return (
+    <p className="mt-2.5 flex items-center gap-1.5 text-[0.82rem] text-brown-600">
+      {!flat && <Icon className={cn('h-4 w-4', up ? 'text-sage-500' : 'text-status-bad')} strokeWidth={2} aria-hidden="true" />}
+      {flat
+        ? `About the same as attempt ${previous.attemptNumber}.`
+        : `${up ? 'Up' : 'Down'} ${Math.abs(Math.round(previous.delta))} points since attempt ${previous.attemptNumber}.`}
+    </p>
   )
 }
 
@@ -136,20 +173,12 @@ export default function Report() {
     navigate('/credits')
   }
 
-  /* ---------- body ---------- */
   let body
 
   if (showingRun) {
     body = <ProcessingState progress={run.progress} onCancel={cancelAnalysis} />
   } else if (run.status === 'error') {
-    body = (
-      <ErrorReport
-        error={run.error}
-        onRetry={() => runAnalysis()}
-        onLearn={goLearn}
-        onCredits={goCredits}
-      />
-    )
+    body = <ErrorReport error={run.error} onRetry={() => runAnalysis()} onLearn={goLearn} onCredits={goCredits} />
   } else if (report.status === 'loading') {
     body = <ReportSkeleton />
   } else if (report.status === 'error') {
@@ -162,17 +191,15 @@ export default function Report() {
       />
     )
   } else if (report.status === 'ready' && analysis) {
-    const metrics = sortByRelevance(analysis.metrics).filter(
-      (m) => m && Number.isFinite(Number(m.score))
-    )
+    const metrics = sortByRelevance(analysis.metrics).filter((m) => m && Number.isFinite(Number(m.score)))
     const duration = analysis.original?.duration
     const tags = analysis.songProfile?.tags || []
+    const estimatedSections = (analysis.sections || []).some((s) => s.isEstimated)
 
     body = (
       <div className="flex flex-col gap-4">
         <AudioComparison key={analysis.analysisId} analysis={analysis} />
 
-        {/* Overall score + the metrics THIS song returned */}
         <section aria-label="Overall performance" className="nm-card animate-fade-up p-4 sm:p-5">
           <div className="grid gap-4 sm:grid-cols-[auto_minmax(0,1fr)] sm:gap-6">
             <OverallScore score={analysis.overallScore} statusLabel={analysis.statusLabel} size={132} />
@@ -186,11 +213,10 @@ export default function Report() {
             )}
           </div>
 
-          {(analysis.summary || tags.length > 0) && (
+          {(analysis.summary || tags.length > 0 || analysis.previousAttempt) && (
             <div className="mt-4 border-t border-gold-100 pt-3.5">
-              {analysis.summary && (
-                <p className="text-[0.88rem] leading-snug text-brown-600">{analysis.summary}</p>
-              )}
+              {analysis.summary && <p className="text-[0.88rem] leading-snug text-brown-600">{analysis.summary}</p>}
+              <ChangeLine previous={analysis.previousAttempt} />
               {tags.length > 0 && (
                 <div className="mt-2.5 flex flex-wrap gap-1.5">
                   {tags.map((tag) => (
@@ -237,6 +263,8 @@ export default function Report() {
           />
           <AttemptHistory history={currentHistory} />
         </CardRow>
+
+        <Notes unavailable={analysis.unavailableMetrics || []} estimatedSections={estimatedSections} />
       </div>
     )
   } else {
@@ -251,17 +279,11 @@ export default function Report() {
 
   return (
     <div className="-mt-8 md:-mt-12">
-      {/* Title block */}
       <div className="animate-fade-up">
         <div className="flex items-start justify-between gap-3">
           <h1 className="nm-title">Report</h1>
           <div className="pt-1.5 md:pt-3">
-            <SongSelect
-              songs={songList}
-              analysis={analysis}
-              disabled={showingRun}
-              onChange={viewAnalysis}
-            />
+            <SongSelect songs={songList} analysis={analysis} disabled={showingRun} onChange={viewAnalysis} />
           </div>
         </div>
 
@@ -269,7 +291,7 @@ export default function Report() {
 
         {analysis?.meta?.isMock && !showingRun && report.status === 'ready' && (
           <Badge variant="gold" size="sm" dot className="mt-2.5">
-            Demo analysis
+            Demo analysis (simulated)
           </Badge>
         )}
       </div>
