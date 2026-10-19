@@ -14,5 +14,10 @@ export default defineConfig({
   server: {
     port: 5173,
     open: true,
+    proxy: {
+      // The browser calls /api/v1/... on port 5173 and Vite forwards it to the backend.
+      '/api': { target: 'http://localhost:8000', changeOrigin: true },
+      '/health': { target: 'http://localhost:8000', changeOrigin: true },
+    },
   },
 })
