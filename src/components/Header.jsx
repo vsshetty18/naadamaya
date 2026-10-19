@@ -62,7 +62,7 @@ export default function Header({ nav, showHero = true, className }) {
         <div className="mx-auto flex w-full max-w-desktop items-center gap-3 px-4 pb-2 pt-4 md:px-8 md:pt-6">
           <Link
             to="/"
-            aria-label="Naadamaya home"
+            aria-label="NAADAMAYA home"
             className="flex min-w-0 flex-1 items-center gap-3 md:flex-none md:gap-4"
           >
             <span className="flex h-[3.4rem] w-[3.4rem] shrink-0 items-center justify-center rounded-full border border-brown-300/70 bg-ivory-50/70 shadow-soft md:h-16 md:w-16">
@@ -76,7 +76,7 @@ export default function Header({ nav, showHero = true, className }) {
 
             <span className="flex min-w-0 flex-col">
               <span className="nm-wordmark truncate text-[1.35rem] leading-none sm:text-[1.7rem] md:text-[2rem]">
-                Naadamaya
+                NAADAMAYA
               </span>
               <span className="nm-tagline mt-1.5 truncate text-[0.52rem] sm:text-[0.6rem] md:text-[0.68rem]">
                 sing. evolve. globally.
