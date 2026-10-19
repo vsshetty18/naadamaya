@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Info, XCircle } from 'lucide-react'
 
 import Badge from '@/components/Badge'
 import { cn } from '@/utils/cn'
@@ -10,17 +10,18 @@ import { getScoreBand } from '@/utils/scoreHelpers'
  * Section-by-section view of WHERE the singer needs to improve.
  *
  *   00:00 ------ 01:00 ------ 02:00 ------ 03:00
- *   [ Verse 1 ][ Chorus ][ Verse 2 ][ High notes ][ Final chorus ]
+ *   [ Section 1 ][ Section 2 ][ Section 3 ]
  *
- *   check  Verse 1            00:00-00:58   88
- *   warn   Chorus             00:58-01:44   79   [Pitch deviation]
+ *   check  Section 1          00:00-00:58   88
+ *   warn   Section 2          00:58-01:44   79   [Pitch deviation]
  *   ...
  *
  * Props:
  *   sections   analysis.sections:
  *              [{ id, sectionName, startTime, endTime, score, status, issues, note }]
- *              status: 'good' | 'warning' | 'critical' (optional, derived from
- *              the score when missing). issues: [{ type, label }]
+ *              status: 'good' | 'warning' | 'critical' | 'unknown'
+ *              'unknown' means nothing in that section could be measured, so it
+ *              is shown neutrally with no score (never as a failure).
  *   duration   total length in seconds (analysis.original.duration).
  *              Falls back to the end of the last section.
  *   onSelect   optional, called with the section when one is chosen
@@ -56,10 +57,20 @@ const STATUS = {
     iconBg: 'bg-blush-100',
     badge: 'bad',
   },
+  neutral: {
+    label: 'Not measured',
+    Icon: Info,
+    bar: 'bg-ivory-300',
+    barActive: 'bg-brown-300',
+    text: 'text-brown-500',
+    iconBg: 'bg-ivory-100',
+    badge: 'neutral',
+  },
 }
 
 /** Maps the backend's status word to a tone, falling back to the score. */
 function resolveTone(section) {
+  if (section.status === 'unknown') return 'neutral'
   switch (section.status) {
     case 'good':
     case 'excellent':
@@ -114,11 +125,24 @@ export default function SongTimeline({ sections, duration, onSelect, className }
   if (!model) return null
 
   const { list, total, ticks } = model
-  const attention = list.filter((s) => s.tone !== 'good').length
+  const attention = list.filter((s) => s.tone === 'warn' || s.tone === 'bad').length
+  const measured = list.filter((s) => s.tone !== 'neutral').length
 
   const choose = (section) => {
     setActiveId((current) => (current === section.key ? null : section.key))
     onSelect?.(section)
+  }
+
+  let headline
+  let headlineVariant = 'good'
+  if (measured === 0) {
+    headline = 'Nothing here could be measured'
+    headlineVariant = 'neutral'
+  } else if (attention === 0) {
+    headline = 'All measured sections on track'
+  } else {
+    headline = `${attention} of ${list.length} ${list.length === 1 ? 'section' : 'sections'} to work on`
+    headlineVariant = 'warn'
   }
 
   return (
@@ -133,10 +157,8 @@ export default function SongTimeline({ sections, duration, onSelect, className }
           </p>
         </div>
 
-        <Badge variant={attention === 0 ? 'good' : 'warn'} size="sm" className="mt-1">
-          {attention === 0
-            ? 'All sections on track'
-            : `${attention} of ${list.length} ${list.length === 1 ? 'section' : 'sections'} to work on`}
+        <Badge variant={headlineVariant} size="sm" className="mt-1">
+          {headline}
         </Badge>
       </div>
 
