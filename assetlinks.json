@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "site.naadamaya.app.twa",
+        "sha256_cert_fingerprints": ["5D:D0:B7:48:4D:48:99:BF:BB:FD:55:59:32:BB:E1:47:CE:AF:61:50:98:F7:D2:DF:77:B5:7E:45:D0:20:A5:2A"]
+      }
+    }]
